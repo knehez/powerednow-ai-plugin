@@ -1,0 +1,22 @@
+{
+  "name": "cordova-plugin-ai",
+  "version": "1.0.0",
+  "description": "Minimal Swift-based Cordova plugin for AI demo",
+  "cordova": {
+    "id": "cordova-plugin-ai",
+    "platforms": ["ios"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://example.com/cordova-plugin-ai.git"
+  },
+  "keywords": [
+    "cordova",
+    "plugin",
+    "ios",
+    "swift",
+    "ai"
+  ],
+  "author": "Nehéz Károly",
+  "license": "MIT"
+}

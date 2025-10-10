@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?>
+<plugin id="cordova-plugin-ai" version="1.0.0"
+        xmlns="http://apache.org/cordova/ns/plugins/1.0"
+        xmlns:ios="http://apache.org/cordova/ns/platforms/ios">
+
+  <name>AIPlugin</name>
+  <description>Minimal Swift-based Cordova plugin for AI demo</description>
+  <license>MIT</license>
+  <keywords>cordova, ios, swift, ai</keywords>
+
+  <!-- JS bridge -->
+  <js-module name="AI" src="www/ai.js">
+    <clobbers target="AI" />
+  </js-module>
+
+  <platform name="ios">
+    <config-file target="config.xml" parent="/*">
+        <feature name="AIPlugin">
+        <param name="ios-package" value="AIPlugin" />
+        <!-- (opcionális) onload="true" ha betöltést akarsz induláskor -->
+        </feature>
+    </config-file>
+
+    <!-- A plugin Swift forrása -->
+    <source-file src="src/ios/AIPlugin.swift" />
+
+    <!--framework src="AppleIntelligence.framework" type="system" weak="true" /-->
+  </platform>
+</plugin>
