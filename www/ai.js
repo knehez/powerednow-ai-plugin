@@ -15,3 +15,11 @@ exports.ask = function(question, success, error) {
 exports.transcript = function(success, error) {
   exec(success, error, 'AIPlugin', 'transcript', []);
 };
+
+/**
+ * AI.speak(text, success, error)
+ * success: function(string) -> acknowledgement text
+ */
+exports.speak = function(text, success, error) {
+  exec(success, error, 'AIPlugin', 'speak', [text]);
+};

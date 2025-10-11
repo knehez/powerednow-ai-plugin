@@ -4,6 +4,13 @@ import Speech
 
 @objc(AIPlugin) class AIPlugin: CDVPlugin {
 
+    private lazy var speechSynthesizer: AVSpeechSynthesizer = {
+        let synth = AVSpeechSynthesizer()
+        synth.delegate = self
+        return synth
+    }()
+    private var isPlaybackSessionActive = false
+
     @objc(ask:)
     func ask(command: CDVInvokedUrlCommand) {
         let question = (command.arguments.first as? String) ?? "Question is missing."
@@ -34,13 +41,67 @@ import Speech
         }
     }
 
+    @objc(speak:)
+    func speak(command: CDVInvokedUrlCommand) {
+        Task { @MainActor in
+            guard let text = (command.arguments.first as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  text.isEmpty == false else {
+                let result = CDVPluginResult(status: .error, messageAs: "Text to speak is required.")
+                self.commandDelegate?.send(result, callbackId: command.callbackId)
+                return
+            }
+
+            if self.speechSynthesizer.isSpeaking {
+                self.speechSynthesizer.stopSpeaking(at: .immediate)
+                self.deactivatePlaybackAudioSession()
+            }
+
+            do {
+                try self.activatePlaybackAudioSession()
+            } catch {
+                let result = CDVPluginResult(status: .error, messageAs: error.localizedDescription)
+                self.commandDelegate?.send(result, callbackId: command.callbackId)
+                return
+            }
+
+            let utterance = AVSpeechUtterance(string: text)
+            if let localeVoice = AVSpeechSynthesisVoice(language: Locale.current.identifier) {
+                utterance.voice = localeVoice
+            }
+            self.speechSynthesizer.speak(utterance)
+
+            let result = CDVPluginResult(status: .ok, messageAs: "Speaking started.")
+            self.commandDelegate?.send(result, callbackId: command.callbackId)
+        }
+    }
+
+    @MainActor
+    private func activatePlaybackAudioSession() throws {
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        isPlaybackSessionActive = true
+    }
+
+    @MainActor
+    private func deactivatePlaybackAudioSession() {
+        guard isPlaybackSessionActive else { return }
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Ignore deactivation failures; nothing actionable for the caller.
+        }
+        isPlaybackSessionActive = false
+    }
+
     private func answerUsingFMOrFallback(question: String) async -> String {
         #if canImport(FoundationModels)
         if #available(iOS 18.0, *) {
             do {
                 return try await FMFacade.shared.generateText(for: question)
             } catch {
-                return "FM hiba: \(error.localizedDescription)"
+                return "FM error: \(error.localizedDescription)"
             }
         } else {
             return "Foundation Models is available only on iOS 18 or later."
@@ -282,6 +343,20 @@ actor FMFacade {
     }
 }
 #endif
+
+extension AIPlugin: AVSpeechSynthesizerDelegate {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            self.deactivatePlaybackAudioSession()
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            self.deactivatePlaybackAudioSession()
+        }
+    }
+}
 
 private enum TranscriptError: LocalizedError {
     case speechPermissionDenied
