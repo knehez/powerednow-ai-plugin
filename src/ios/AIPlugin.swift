@@ -1,15 +1,12 @@
-//
-//  AIPlugin.swift
-//  Cordova AI Demo – iOS plugin
-//
-
 import Foundation
+import AVFoundation
+import Speech
 
 @objc(AIPlugin) class AIPlugin: CDVPlugin {
 
     @objc(ask:)
     func ask(command: CDVInvokedUrlCommand) {
-        let question = (command.arguments.first as? String) ?? "Kérdés hiányzik."
+        let question = (command.arguments.first as? String) ?? "Question is missing."
 
         Task { @MainActor in
             let answer = await self.answerUsingFMOrFallback(question: question)
@@ -18,7 +15,25 @@ import Foundation
         }
     }
 
-    // MARK: - FM (ha van) vagy fallback
+    @objc(transcript:)
+    func transcript(command: CDVInvokedUrlCommand) {
+        Task { @MainActor in
+            do {
+                let text: String
+                if #available(iOS 10.0, *) {
+                    text = try await self.recordAndTranscribe()
+                } else {
+                    throw TranscriptError.recognizerUnavailable
+                }
+                let result = CDVPluginResult(status: .ok, messageAs: text)
+                self.commandDelegate?.send(result, callbackId: command.callbackId)
+            } catch {
+                let result = CDVPluginResult(status: .error, messageAs: error.localizedDescription)
+                self.commandDelegate?.send(result, callbackId: command.callbackId)
+            }
+        }
+    }
+
     private func answerUsingFMOrFallback(question: String) async -> String {
         #if canImport(FoundationModels)
         if #available(iOS 18.0, *) {
@@ -28,30 +43,186 @@ import Foundation
                 return "FM hiba: \(error.localizedDescription)"
             }
         } else {
-            return "A Foundation Models iOS 18 alatt érhető el."
+            return "Foundation Models is available only on iOS 18 or later."
         }
         #else
-        // Publikus SDK eset: nincs FoundationModels modul → fix/fallback
-        return "Holnap 10:00, A/5 203-as terem. (fallback)"
+        
+        return "(fallback) - Foundation Models is not available in this environment."
         #endif
+    }
+
+    // MARK: - Speech to text
+    @MainActor
+    @available(iOS 10.0, *)
+    private func recordAndTranscribe(maxDuration: TimeInterval = 15) async throws -> String {
+        try await ensureSpeechAuthorization()
+        try await ensureMicrophonePermission()
+
+        guard let recognizer = SFSpeechRecognizer() else {
+            throw TranscriptError.recognizerUnavailable
+        }
+        guard recognizer.isAvailable else {
+            throw TranscriptError.recognizerUnavailable
+        }
+
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+        let audioEngine = AVAudioEngine()
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            request.append(buffer)
+        }
+
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            throw error
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            var finished = false
+            var timeoutWorkItem: DispatchWorkItem?
+            var recognitionTask: SFSpeechRecognitionTask?
+            var latestPartial: String?
+            var silenceWorkItem: DispatchWorkItem?
+            let silenceTimeout: TimeInterval = 1.5
+
+            func stopAudioSession() {
+                audioEngine.stop()
+                inputNode.removeTap(onBus: 0)
+                request.endAudio()
+                recognitionTask?.cancel()
+                timeoutWorkItem?.cancel()
+                silenceWorkItem?.cancel()
+                try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            }
+
+            func finish(_ result: Result<String, Error>) {
+                guard !finished else { return }
+                finished = true
+                stopAudioSession()
+                switch result {
+                case .success(let text):
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        continuation.resume(throwing: TranscriptError.noSpeechDetected)
+                    } else {
+                        continuation.resume(returning: trimmed)
+                    }
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+
+            recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+                if let error = error {
+                    finish(.failure(error))
+                    return
+                }
+
+                guard let result = result else { return }
+
+                let text = result.bestTranscription.formattedString
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    latestPartial = text
+                    silenceWorkItem?.cancel()
+                    let workItem = DispatchWorkItem {
+                        if let partial = latestPartial?.trimmingCharacters(in: .whitespacesAndNewlines),
+                           !partial.isEmpty {
+                            finish(.success(partial))
+                        }
+                    }
+                    silenceWorkItem = workItem
+                    DispatchQueue.main.asyncAfter(deadline: .now() + silenceTimeout, execute: workItem)
+                }
+
+                if result.isFinal {
+                    finish(.success(text))
+                }
+            }
+
+            let workItem = DispatchWorkItem {
+                if let partial = latestPartial?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !partial.isEmpty {
+                    finish(.success(partial))
+                } else {
+                    finish(.failure(TranscriptError.timeout))
+                }
+            }
+            timeoutWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + maxDuration, execute: workItem)
+        }
+    }
+
+    @MainActor
+    @available(iOS 10.0, *)
+    private func ensureSpeechAuthorization() async throws {
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized:
+            return
+        case .denied:
+            throw TranscriptError.speechPermissionDenied
+        case .restricted:
+            throw TranscriptError.recognizerUnavailable
+        case .notDetermined:
+            let status = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { authStatus in
+                    continuation.resume(returning: authStatus)
+                }
+            }
+            if status != .authorized {
+                throw TranscriptError.speechPermissionDenied
+            }
+        @unknown default:
+            throw TranscriptError.recognizerUnavailable
+        }
+    }
+
+    @MainActor
+    private func ensureMicrophonePermission() async throws {
+        let audioSession = AVAudioSession.sharedInstance()
+        switch audioSession.recordPermission {
+        case .granted:
+            return
+        case .denied:
+            throw TranscriptError.microphonePermissionDenied
+        case .undetermined:
+            let granted = await withCheckedContinuation { continuation in
+                audioSession.requestRecordPermission { ok in
+                    continuation.resume(returning: ok)
+                }
+            }
+            if !granted {
+                throw TranscriptError.microphonePermissionDenied
+            }
+        @unknown default:
+            throw TranscriptError.microphonePermissionDenied
+        }
     }
 }
 
 #if canImport(FoundationModels)
 import FoundationModels
 
-/// Egy nagyon vékony "facade", a neten talált SwiftFM mintájára.
-/// - Figyelem: ez **privát** API-kra épül; publikus Xcode SDK-val várhatóan nem fordul.
 @available(iOS 18.0, *)
 actor FMFacade {
     static let shared = FMFacade()
 
-    // A példa alapján:
-    // - LanguageModelSession kezeli a konverzációt
-    // - GenerationOptions paraméterez
+    // Based on the sample:
+    // - LanguageModelSession keeps track of the conversation
+    // - GenerationOptions provides configuration
     private let session: LanguageModelSession
 
-    // Alap beállítások (system prompt, temperature, max token)
+    // Default configuration (system prompt, temperature, max token)
     struct Config {
         var system: String? = nil
         var temperature: Double = 0.6
@@ -78,7 +249,7 @@ actor FMFacade {
         return r.content
     }
 
-    // (opcionális) streaming minta – ha kell
+    // Optional streaming helper if streaming output is required
     func streamText(for prompt: String) -> AsyncThrowingStream<String, Error> {
         let s = self.session
         let cfg = self.config
@@ -105,9 +276,32 @@ actor FMFacade {
         }
     }
 
-    // (opcionális) elérhetőség lekérdezése
+    // Optional availability check for the on-device model
     static var isModelAvailable: Bool {
         SystemLanguageModel.default.isAvailable
     }
 }
 #endif
+
+private enum TranscriptError: LocalizedError {
+    case speechPermissionDenied
+    case microphonePermissionDenied
+    case recognizerUnavailable
+    case timeout
+    case noSpeechDetected
+
+    var errorDescription: String? {
+        switch self {
+        case .speechPermissionDenied:
+            return "Speech recognition permission was denied. Please enable it in Settings."
+        case .microphonePermissionDenied:
+            return "Microphone permission was denied. Please enable it in Settings."
+        case .recognizerUnavailable:
+            return "Speech recognizer is not available on this device."
+        case .timeout:
+            return "Timed out before a final transcription was received."
+        case .noSpeechDetected:
+            return "No speech was detected."
+    }
+}
+}
