@@ -42,7 +42,18 @@
       <uses-permission android:name="android.permission.RECORD_AUDIO" />
     </config-file>
 
+    <config-file target="AndroidManifest.xml" parent="/manifest/application">
+      <uses-native-library android:name="libOpenCL.so" android:required="false" />
+      <uses-native-library android:name="libOpenCL-car.so" android:required="false" />
+      <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
+    </config-file>
+
     <source-file src="src/android/AIPlugin.kt" target-dir="app/src/main/java/com/powerednow/ai" />
-    <resource-file src="src/android/build-extras.gradle" target="app/build-extras.gradle" />
+    <source-file src="src/android/SpeechToTextManager.kt" target-dir="app/src/main/java/com/powerednow/ai" />
+    <source-file src="src/android/TextToSpeechManager.kt" target-dir="app/src/main/java/com/powerednow/ai" />
+    <source-file src="src/android/LlmManager.kt" target-dir="app/src/main/java/com/powerednow/ai" />
+
+    <framework src="com.google.mediapipe:tasks-genai:0.10.24" />
+    <framework src="com.google.ai.edge.localagents:localagents-fc:0.1.0" />
   </platform>
 </plugin>
