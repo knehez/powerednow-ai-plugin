@@ -1,14 +1,14 @@
 {
-  "name": "cordova-plugin-ai",
+  "name": "powerednow-ai-plugin",
   "version": "1.0.0",
-  "description": "Minimal Swift-based Cordova plugin for AI demo",
+  "description": "PoweredNow AI Plugin",
   "cordova": {
-    "id": "cordova-plugin-ai",
-    "platforms": ["ios"]
+    "id": "powerednow-ai-plugin",
+    "platforms": ["ios", "android"]
   },
   "repository": {
     "type": "git",
-    "url": "https://example.com/cordova-plugin-ai.git"
+    "url": "https://example.com/powerednow-ai-plugin.git"
   },
   "keywords": [
     "cordova",

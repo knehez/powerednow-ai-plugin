@@ -1,0 +1,25 @@
+def pluginSrcDir = rootProject.file("../plugins/powerednow-ai-plugin/src/android")
+def destDir      = file("src/main/java/com/powerednow/ai")
+
+tasks.register("syncAiPluginSources", Copy) {
+    from(pluginSrcDir) {
+        include("**/*")
+        exclude("**/build-extras.gradle")
+    }
+    into(destDir)
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    doFirst {
+        println "[AIPlugin] Sync ALL from ${pluginSrcDir} -> ${destDir}"
+    }
+}
+
+tasks.matching { it.name == "preBuild" }.all {
+    dependsOn("syncAiPluginSources")
+}
+
+gradle.projectsEvaluated {
+    ["compileDebugKotlin","compileReleaseKotlin",
+     "compileDebugJavaWithJavac","compileReleaseJavaWithJavac"].each { t ->
+        tasks.findByName(t)?.dependsOn("syncAiPluginSources")
+    }
+}

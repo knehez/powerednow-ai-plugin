@@ -1,7 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
-<plugin id="cordova-plugin-ai" version="1.0.0"
-        xmlns="http://apache.org/cordova/ns/plugins/1.0"
-        xmlns:ios="http://apache.org/cordova/ns/platforms/ios">
+<plugin id="powerednow-ai-plugin" version="1.0.0"
+  xmlns="http://apache.org/cordova/ns/plugins/1.0"
+  xmlns:ios="http://apache.org/cordova/ns/platforms/ios"
+  xmlns:android="http://schemas.android.com/apk/res/android">
 
   <name>AIPlugin</name>
   <description>Minimal Swift-based Cordova plugin for AI demo</description>
@@ -15,15 +16,33 @@
 
   <platform name="ios">
     <config-file target="config.xml" parent="/*">
-        <feature name="AIPlugin">
+      <feature name="AIPlugin">
         <param name="ios-package" value="AIPlugin" />
         <!-- (opcionális) onload="true" ha betöltést akarsz induláskor -->
-        </feature>
+      </feature>
     </config-file>
 
     <!-- A plugin Swift forrása -->
     <source-file src="src/ios/AIPlugin.swift" />
 
-    <!--framework src="AppleIntelligence.framework" type="system" weak="true" /-->
+    <!--framework
+    src="AppleIntelligence.framework" type="system" weak="true" /-->
+  </platform>
+
+  <platform name="android">
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="AIPlugin">
+        <param name="android-package" value="com.powerednow.ai.AIPlugin" />
+      </feature>
+      <preference name="GradlePluginKotlinEnabled" value="true" />
+      <preference name="GradlePluginKotlinVersion" value="1.9.24" />
+    </config-file>
+
+    <config-file target="AndroidManifest.xml" parent="/manifest">
+      <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    </config-file>
+
+    <source-file src="src/android/AIPlugin.kt" target-dir="app/src/main/java/com/powerednow/ai" />
+    <resource-file src="src/android/build-extras.gradle" target="app/build-extras.gradle" />
   </platform>
 </plugin>
