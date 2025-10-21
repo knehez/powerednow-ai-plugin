@@ -11,10 +11,13 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.media.AudioAttributes
+import android.speech.tts.TextToSpeech
 import java.util.Locale
 
-class AIPlugin : CordovaPlugin() {
+class AIPlugin : CordovaPlugin(), TextToSpeech.OnInitListener {
 
+    // STT
     private var speechRecognizer: android.speech.SpeechRecognizer? = null
     private var recognitionIntent: android.content.Intent? = null
     private var transcriptCallback: CallbackContext? = null
@@ -29,6 +32,12 @@ class AIPlugin : CordovaPlugin() {
 
     private val REQUEST_RECORD_AUDIO = 1001
     private val RECORD_AUDIO = android.Manifest.permission.RECORD_AUDIO
+
+    // TTS
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var pendingSpeakText: String? = null
+    private var pendingSpeakCallback: CallbackContext? = null
 
     companion object {
         private const val TAG = "AIPlugin"
@@ -54,33 +63,78 @@ class AIPlugin : CordovaPlugin() {
 
     private fun transcript(args: JSONArray, callbackContext: CallbackContext) {
         Log.d(TAG, "transcript() called")
+
         if (transcriptCallback != null) {
-            // már fut egy felismerés – egyszerre egyet engedjünk
             Log.w(TAG, "transcript already in progress; ignoring")
             callbackContext.error("Recognition already in progress.")
             return
         }
+
         transcriptCallback = callbackContext
-        // jogosultság ellenőrzés
         if (!hasAudioPermission()) {
             requestAudioPermission()
             return
         }
+
         startRecognition()
     }
 
     private fun ask(args: JSONArray, callbackContext: CallbackContext) {
         val question = args.optString(0, "")
         Log.d(TAG, "ask() called with question='$question'")
-        // később ide jöhet a feldolgozás, most csak log
-        callbackContext.success() // üres OK válasz
+        callbackContext.success("It's sunny and mild in New York today, around 11 °C now and rising to about 20 °C, with possible showers late tonight.") // üres OK válasz
     }
 
     private fun speak(args: JSONArray, callbackContext: CallbackContext) {
-        val text = args.optString(0, "")
-        Log.d(TAG, "speak() called with text='$text'")
-        // később ide jöhet TTS logika, most csak log
-        callbackContext.success()
+        val text = args.optString(0, "").trim()
+        if (text.isEmpty()) {
+            callbackContext.error("Text to speak is required.")
+            return
+        }
+
+        val activity = cordova.activity
+        if (activity == null) {
+            callbackContext.error("Activity unavailable.")
+            return
+        }
+
+        activity.runOnUiThread {
+            try {
+                if (tts == null) {
+                    pendingSpeakText = text
+                    pendingSpeakCallback = callbackContext
+                    tts = TextToSpeech(activity, this)
+                    tts?.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    return@runOnUiThread
+                }
+
+                if (!ttsReady) {
+                    pendingSpeakText = text
+                    pendingSpeakCallback = callbackContext
+                    return@runOnUiThread
+                }
+
+                speakNow(text)
+                callbackContext.success("Speaking started.")
+            } catch (t: Throwable) {
+                callbackContext.error("TTS error: ${t.message}")
+            }
+        }
+    }
+
+    private fun speakNow(text: String) {
+        try { tts?.stop() } catch (_: Throwable) {}
+        tts?.speak(
+            text,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "utt-${System.currentTimeMillis()}"
+        )
     }
 
     private fun hasAudioPermission(): Boolean {
@@ -119,7 +173,6 @@ class AIPlugin : CordovaPlugin() {
 
         Log.d(TAG, "startRecognition()")
 
-        // Minden, ami SpeechRecognizer-rel kapcsolatos, fusson a főszálon!
         cordova.activity.runOnUiThread {
             try {
                 cleanupRecognizer()
@@ -231,13 +284,62 @@ class AIPlugin : CordovaPlugin() {
         cb?.error(message)
     }
 
+    override fun onInit(status: Int) {
+        val activity = cordova.activity ?: return
+        activity.runOnUiThread {
+            if (status == TextToSpeech.SUCCESS) {
+                val res = tts?.setLanguage(Locale.getDefault())
+                ttsReady = res != TextToSpeech.LANG_MISSING_DATA &&
+                        res != TextToSpeech.LANG_NOT_SUPPORTED
+
+                tts?.setSpeechRate(1.1f)
+                tts?.setPitch(1.2f)
+
+                if (!ttsReady) {
+                    pendingSpeakCallback?.error("TTS language data missing or not supported.")
+                    pendingSpeakText = null
+                    pendingSpeakCallback = null
+                    // activity.startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
+                    return@runOnUiThread
+                }
+
+                pendingSpeakText?.let { txt ->
+                    speakNow(txt)
+                    pendingSpeakCallback?.success("Speaking started.")
+                }
+            } else {
+                ttsReady = false
+                pendingSpeakCallback?.error("TTS initialization failed.")
+            }
+
+            pendingSpeakText = null
+            pendingSpeakCallback = null
+        }
+    }
+
+    private fun stopTts() {
+        try { tts?.stop() } catch (_: Throwable) {}
+    }
+
     override fun onReset() {
         super.onReset()
         stopRecognition()
+        cordova.activity?.runOnUiThread { stopTts() }
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         stopRecognition()
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+
+        cordova.activity?.runOnUiThread {
+            stopTts()
+            try { tts?.shutdown() } catch (_: Throwable) {}
+            tts = null
+            ttsReady = false
+        }
+
+        super.onDestroy()
     }
 }
